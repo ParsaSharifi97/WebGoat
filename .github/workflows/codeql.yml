@@ -1,0 +1,109 @@
+name: "CodeQL Analysis"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '25 8 * * 3' # Every Wednesday at 08:25 UTCa
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.language == 'swift' && 'macos-latest' || 'ubuntu-latest' }}
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '23'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          config-file: .github/codeql-config.yml
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build project for Java/Kotlin
+        if: matrix.language == 'java-kotlin' && matrix.build-mode == 'manual'
+        shell: bash
+        run: mvn -B clean compile -DskipTests
+
+      # For non-Java languages, just run standard CodeQL analysis
+      - name: Perform CodeQL Analysis (Non-Java)
+        if: matrix.language != 'java-kotlin'
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+      # For Java, we need custom filtering
+      - name: Perform CodeQL Analysis (Java - No Upload)
+        if: matrix.language == 'java-kotlin'
+        uses: github/codeql-action/analyze@v3
+        with:
+          upload: false
+          output: ${{ runner.temp }}/codeql-results
+
+      - name: Filter and Upload Java Results
+        if: matrix.language == 'java-kotlin'
+        shell: bash
+        run: |
+          # Install jq if needed
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+          
+          # Find the SARIF file
+          SARIF_FILE=$(find "${{ runner.temp }}/codeql-results/" -name "*.sarif" -type f | head -1)
+          
+          if [ -z "$SARIF_FILE" ]; then
+            echo "Error: No SARIF file found"
+            ls -la "${{ runner.temp }}/codeql-results/" || echo "Directory doesn't exist"
+            exit 1
+          fi
+          
+          echo "Processing SARIF file: $SARIF_FILE"
+          
+          # Filter the SARIF file
+          jq '
+            .runs[].results |= map(
+              select(
+                [.locations[]?.physicalLocation?.artifactLocation?.uri // ""] as $uris |
+                $uris | any(
+                  . as $uri |
+                  ($uri | startswith("src/main/java/org/owasp/webgoat/lessons/jwt/") | not) and
+                  ($uri | startswith("src/main/java/org/owasp/webgoat/lessons/httpbasic/") | not)
+                )
+              )
+            )
+          ' "$SARIF_FILE" > "${{ runner.temp }}/filtered.sarif"
+          
+          echo "SARIF filtered successfully"
+
+      - name: Upload Filtered Java Results
+        if: matrix.language == 'java-kotlin'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ runner.temp }}/filtered.sarif
+          category: "/language:${{matrix.language}}"
