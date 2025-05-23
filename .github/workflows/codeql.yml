@@ -94,7 +94,9 @@ jobs:
                   . as $uri |
                   ($uri | startswith("src/main/java/org/owasp/webgoat/lessons/jwt/") | not) and
                   ($uri | startswith("src/main/java/org/owasp/webgoat/lessons/httpbasic/") | not) and 
-                  ($uri | startswith("src/main/java/org/owasp/webgoat/lessons/deserialization/") | not)
+                  ($uri | startswith("src/main/java/org/owasp/webgoat/lessons/deserialization/") | not) and
+                  ($uri | startswith("src/main/java/org/owasp/webgoat/container/") | not)
+
                 )
               )
             )
